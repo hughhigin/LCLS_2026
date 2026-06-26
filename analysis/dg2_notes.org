@@ -1,0 +1,50 @@
+# Visual inspection notes
+| RUN | Pattern?   | Freq?                      |
+|-----+------------+----------------------------|
+|  10 | not really | Maybe ~1 hz                |
+|  21 | maybe?     | 1-5 smear, 20 hz, 60 hz?   |
+|  22 | maybe?     | ~0.5 hz, 20 hz             |
+|  23 | maybe?     | 0-5 hz smear, 20 hz, 40 hz |
+|     |            |                            |
+|     |            |                            |
+|     |            |                            |
+|     |            |                            |
+|     |            |                            |
+
+* Try with stricter smoothing
+| RUN |  ii | Pattern?                      | Freq?                      |
+|-----+-----+-------------------------------+----------------------------|
+|  10 |     | not really                    | Maybe ~1 hz                |
+|  21 |     | maybe?                        | 1-5 smear, 20 hz, 60 hz?   |
+|  22 |     | maybe?                        | ~0.5 hz, 20 hz             |
+|  23 |     | maybe?                        | 0-5 hz smear, 20 hz, 40 hz |
+|  68 |     | maybe?                        |                            |
+|  99 |     | maybe? seems signal           |                            |
+| 113 |     | maybe? also maybe det         |                            |
+| 124 |     | maybe?                        |                            |
+| 134 |     | maybe?                        |                            |
+| 141 |  74 | maybe?                        |                            |
+| 143 |  76 | I think YES                   |                            |
+| 145 |  78 | yes FASTER                    |                            |
+| 146 |  79 | yes SLOWER                    |                            |
+| 149 |  82 | No?                           |                            |
+| 150 |  83 | YES slower?                   |                            |
+| 154 |  87 | No, though 151-153 something? |                            |
+| 155 |  88 | YES AGAIN                     |                            |
+| 156 |  89 | yes but weird                 |                            |
+| 157 |  90 | yes?!                         |                            |
+| 158 |  91 | YES                           |                            |
+| 163 |  96 | no?!                          |                            |
+| 164 |     | no                            |                            |
+| 165 |     | no                            |                            |
+| 168 | 101 | yes, slow?                    |                            |
+| 169 |     | yes, slow?                    |                            |
+| 119 |     | yes?                          |                            |
+| 134 |     | yes                          |                            |
+|     |     |                               |                            |
+|     |     |                               |                            |
+|     |     |                               |                            |
+| 224 |     | BIG TIME                      | *0.6 Hz*, 42 Hz, 52 Hz       |
+|     |     |                               |                            |
+|     |     |                               |                            |
+|     |     |                               |                            |
