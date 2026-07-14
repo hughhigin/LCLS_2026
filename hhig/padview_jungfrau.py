@@ -11,6 +11,7 @@ from reborn.analysis.parallel import ParallelAnalyzer
 from reborn.analysis.saxs import RadialProfiler
 # from reborn import detector
 import config
+# import config_noMasks as config
 import reborn
 import os
 import psana
@@ -23,7 +24,8 @@ memory = joblib.Memory(default_config["joblib_directory"])
 # Hardcoded parameters to start
 run_number = 7
 max_events = 1e7
-detector="epix"
+detector="jungfrau"
+# detector="epix"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

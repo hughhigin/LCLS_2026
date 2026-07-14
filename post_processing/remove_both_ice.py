@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+# Remove ice based on epix and jungfrau thresholds
+
+import numpy as np
+import pyqtgraph as pg
+import joblib
+from reborn.dataframe import DataFrame
+from reborn.external.pyqtgraph import imview
+from reborn.external.lcls import LCLSFrameGetter
+from reborn import analysis
+from reborn.viewers.qtviews import PADView
+from reborn.analysis.parallel import ParallelAnalyzer
+from reborn.analysis.saxs import RadialProfiler
+# from reborn import detector
+
+from psana import *
+import config
+import runstats
+import reborn
+import os,sys
+import psana
+from scipy import ndimage
+import h5py
+import matplotlib.pyplot as plt
+import argparse
+import shutil
+
+exp_id = "cxi101672626"
+
+default_config = config.default_config()
+memory = joblib.Memory(default_config["joblib_directory"])
+
+# Hardcoded numbers
+run_number =  224
+detector="jungfrau"
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-r", "--run", type=int, default=None, help="Run number")
+    args = parser.parse_args()
+    run_number = args.run
+
+# %% running
+# TODO: make old names complicated, simplify new name
+# TODO: use both
+
+home_dir = "/sdf/data/lcls/ds/cxi/cxi101672626/results/post_processing/"
+reb_dir = f"{home_dir}results/reb_hdf5/"
+deIced_dir = f"{home_dir}results/deIced_hdf5/"
+npy_dir = f"{home_dir}results/npy_files/"
+
+run_str = f"r{run_number:04d}"
+
+max_events = 1e7
+mthresh = 2e9
+gthresh = 20
+
+# Get indices from epix thresh file
+gain_filename = f"epix_r{run_number:04d}_gain_bitSums.npy"
+if not os.path.isfile(npy_dir + gain_filename):
+    print("ERROR")
+    pinds = []
+else:
+    gain_vals = np.load(npy_dir + gain_filename)
+    pinds = list(np.where(gain_vals >= gthresh)[0])
+    print(pinds)
+
+h5j_name = reb_dir + f"{exp_id}_{run_str}_jungfrau_step1.h5"
+newj_name = deIced_dir + f"{exp_id}_{run_str}_jungfrau.h5"
+
+h5e_name = reb_dir + f"{exp_id}_{run_str}_epix_step1.h5"
+newe_name = deIced_dir + f"{exp_id}_{run_str}_epix.h5"
+
+shutil.copy(h5e_name, newe_name)
+shutil.copy(h5j_name, newj_name)
+
+
+with h5py.File(newj_name, 'a') as h5j:
+    # Calculate pinds
+    # Jungfrau ice
+    maxes = h5j['/fmax'][:]
+    pinds.extend(list(np.where(maxes >= mthresh)[0]))
+    pinds = list(set(pinds))
+    pinds.sort()
+    print(pinds)
+
+    # Calculate iced frames (jungfrau
+    fids = h5j['/frame_id']
+    num_frames = len(fids)
+    for key in h5j.keys():
+        # print(key)
+        val = h5j[key]
+        val_sh = val.shape
+        # print(val_sh)
+        if (val_sh and (val_sh[0] == num_frames)):
+            val = np.delete(val[:], pinds, axis=0)
+            # print(val.shape)
+            del h5j[key]
+            h5j.create_dataset('/' + key, data=val)
+
+with h5py.File(newe_name, 'a') as h5re:
+    print(pinds)
+    fids = h5re['/frame_id']
+    num_frames = len(fids)
+    for key in h5re.keys():
+        # print(key)
+        val = h5re[key]
+        val_sh = val.shape
+        # print(val_sh)
+        if (val_sh and (val_sh[0] == num_frames)):
+            val = np.delete(val[:], pinds, axis=0)
+            # print(val.shape)
+            del h5re[key]
+            h5re.create_dataset('/' + key, data=val)
+
+
+# # %% Test
+
+# with h5py.File(newe_name, 'r') as h5re:
+#     fids = h5re['/frame_id']
+#     for key in h5re.keys():
+#         print(key)
+#         val = h5re[key]
+#         val_sh = val.shape
+#         print(val_sh)
+
+# with h5py.File(newj_name, 'r') as h5re:
+#     fids = h5re['/frame_id']
+#     for key in h5re.keys():
+#         print(key)
+#         val = h5re[key]
+#         val_sh = val.shape
+#         print(val_sh)

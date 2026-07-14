@@ -1,4 +1,14 @@
 #!/usr/bin/env python
+
+"""
+Main function to write radials using reborn, called in batch jobs
+NOTE: use notes and asterisks to mark key changes as much as possible
+NOTE: Automatically calls runstats, which creates large files in the runstats dir
+NOTE: Filepath and masking details set in "config.py"
+TODO: Modify the "main" function to write appropriate psana detectors, direct (not framegetter)
+"""
+
+import sys, shutil
 import argparse
 import numpy as np
 import pyqtgraph as pg
@@ -12,6 +22,7 @@ from reborn.analysis.parallel import ParallelAnalyzer
 from reborn.analysis.saxs import RadialProfiler
 # from reborn import detector
 import config
+# import config_noMasks as config # NO MASK VERSION OF CONFIG FILE**
 import reborn
 import os
 import psana
@@ -95,7 +106,7 @@ class MyParallelRadialProfiler(ParallelAnalyzer):
             pad_geometry=pad_geometry,
             beam=beam,
         )
-        self.radials = {
+        self.radials = { # ** REMOVE EXTRA INFO
             "sum": [],
             "sum2": [],
             "wsum": [],
@@ -111,6 +122,7 @@ class MyParallelRadialProfiler(ParallelAnalyzer):
             "pad_geometry": pad_geometry,
             "beam": beam,
             "mask": mask,
+            # "wave8": [], # Can this be done in parallel, or batch at end?
         }
 
         #add some entries to the dictionary for my pv values I want to save
@@ -160,6 +172,7 @@ class MyParallelRadialProfiler(ParallelAnalyzer):
         self.radials["median"].extend(stats["median"])
         self.radials["frame_id"].extend(stats["frame_id"])
         self.radials["n_frames"] += stats["n_frames"]
+        # self.radials["wave8"].extend(stats["frame_id"])
 
 
     def to_dict(self):
@@ -184,6 +197,7 @@ class MyParallelRadialProfiler(ParallelAnalyzer):
                 - **pad_geometry** (|PADGeometryList|) -- Detector geometry used to set up RadialProfiler.
                 - **beam** (|Beam|) -- X-ray beam used to set up RadialProfiler.
                 - **mask** (|ndarray|) -- Mask used to set up RadialProfiler.
+                - **wave8** (|ndarray|) -- Wave8 counts, HUGH TESTING
         """
         return self.radials
 
@@ -203,10 +217,11 @@ class MyParallelRadialProfiler(ParallelAnalyzer):
         self.radials["pad_geometry"] = stats["pad_geometry"]
         self.radials["beam"] = stats["beam"]
         self.radials["mask"] = stats["mask"]
+        # self.radials["wave8"] = stats["mask"]
 
 
 class MyLCLSFrameGetter(LCLSFrameGetter):
-    def __init__(self, other_detectors_pv=None, mask=None, **kwargs):
+    def __init__(self, other_detectors_pv=None, mask=None, wave8_dict=None, **kwargs):
         """sub class of LCLSFrameGetter which allows additional detectors to be read from data.
         Give other_detectors as list of strings containing PV names desired."""
         super().__init__(**kwargs)
@@ -220,9 +235,8 @@ class MyLCLSFrameGetter(LCLSFrameGetter):
         else:
             self.other_detectors_pv = None
             self.other_detectors = None
-        # print("Hello from MyLCLSFrameGetter")
-        # print(self.other_detectors_pv)
-        self.mask = mask
+
+        print("Hello from MyLCLSFrameGetter")
 
     def get_data(self, frame_number=0):
         df = super().get_data(frame_number)
@@ -233,10 +247,8 @@ class MyLCLSFrameGetter(LCLSFrameGetter):
         df.set_mask(self.mask)
         return df
 
-
-
 # @memory.cache(ignore=["n_processes"])
-def get_radials(run_number=1, n_processes=1, start=0, stop=None, detector="jungfrau"):
+def get_radials(run_number=1, n_processes=1, start=0, stop=None, step=1, detector="jungfrau"):
     max_events = 1e7
     conf = config.get_config(run_number, detector)
     log_file = os.path.dirname(conf["runstats"]["log_file"])
@@ -253,6 +265,7 @@ def get_radials(run_number=1, n_processes=1, start=0, stop=None, detector="jungf
     else:
         runstats_conf["stop"] = stop
     runstats_conf["start"] = start
+    runstats_conf["step"] = step
     runstats_conf["n_processes"] = n_processes
     detectors = conf["pad_detectors"]
     # for d in detectors:
@@ -273,31 +286,37 @@ def get_radials(run_number=1, n_processes=1, start=0, stop=None, detector="jungf
     # mask = reborn.detector.load_pad_masks("geometry/combined_masks.mask")
 
     #grab all masks to perform binary dilation
-    masks = []
-    # mask = reborn.detector.load_pad_masks("geometry/jungfrau_edges_belowstd-outer_abovestd-inner.mask")
-    for mask_fn in conf["pad_detectors"][0]["mask"]:
-        print(mask_fn)
-        mask = reborn.detector.load_pad_masks(mask_fn)
-        #now loop through each panel of each mask and perform binary erosion
-        print(np.sum(mask))
-        for i in range(len(mask)):
-            #expand each pixel in the mask by the cross shape because many pixels were
-            #causing bleeding to neighboring pixels above, below, to the sides of central masked pixel
-            mask[i] = ndimage.binary_erosion(mask[i])
-        print(np.sum(mask))
-        masks.append(mask)
+    mask = None
+    if "mask" in conf["pad_detectors"][0]:
+        masks = []
+        # mask = reborn.detector.load_pad_masks("geometry/jungfrau_edges_belowstd-outer_abovestd-inner.mask")
+        for mask_fn in conf["pad_detectors"][0]["mask"]:
+            print(mask_fn)
+            mask = reborn.detector.load_pad_masks(mask_fn)
+            #now loop through each panel of each mask and perform binary erosion
+            print(np.sum(mask))
+            for i in range(len(mask)):
+                #expand each pixel in the mask by the cross shape because many pixels were
+                #causing bleeding to neighboring pixels above, below, to the sides of central masked pixel
+                mask[i] = ndimage.binary_erosion(mask[i])
+            print(np.sum(mask))
+            masks.append(mask)
 
-    #multiply all masks together to make one mask
-    new_mask = masks[0].copy()
-    for i in range(len(masks)):
-        #loop through each panel
-        for j in range(len(new_mask)):
-            new_mask[j] *= masks[i][j]
+        #multiply all masks together to make one mask
+        new_mask = masks[0].copy()
+        for i in range(len(masks)):
+            #loop through each panel
+            for j in range(len(new_mask)):
+                new_mask[j] *= masks[i][j]
 
-    mask = new_mask
-    print("Total mask: %d" % np.sum(mask))
+        mask = new_mask
+        print("Total mask: %d" % np.sum(mask))
 
     # reborn.detector.save_pad_masks("geometry/combined_masks.mask", mask)
+    # print("Diode dict")
+    # print(conf["diode_dict"])
+    # print("Photon wavelength")
+    # print(conf["photon_wavelength_pv"])
 
     print("setting up framegetter:")
     framegetter = MyLCLSFrameGetter(
@@ -309,7 +328,8 @@ def get_radials(run_number=1, n_processes=1, start=0, stop=None, detector="jungf
         postprocessors=None,
         photon_wavelength_pv=conf["photon_wavelength_pv"],
         #other_detectors_pv=["Acqiris"],
-        mask=mask
+        mask=mask,
+        # wave8_dict=conf["diode_dict"]
     )
     print("finished framegetter set up")
 
@@ -363,10 +383,14 @@ def get_radials(run_number=1, n_processes=1, start=0, stop=None, detector="jungf
     return radials_dict
 
 if __name__ == "__main__":
+    # TODO: rename post_sample_intensity to dg2?
+    # TODO: waveform -> "digitizer", scalar field from __
+    # TODO: include upstream diodes
     parser = argparse.ArgumentParser()
     parser.add_argument("-r", "--run", type=int, default=None, help="Run number")
     parser.add_argument("--start", type=int, default=0, help="start frame number")
     parser.add_argument("--stop",type=int, default=None, help="stop frame number")
+    parser.add_argument("--step",type=int, default=1, help="Every Nth frame")
     parser.add_argument("-j", "--n_processes", type=int, default=12, help="Number of parallel processes")
     parser.add_argument("-d", "--detector", type=str, default='jungfrau', help="Detector to analyze (default=jungfrau, can also be epix.)")
     args = parser.parse_args()
@@ -374,30 +398,111 @@ if __name__ == "__main__":
     conf = config.get_config(args.run, args.detector)
 
     # output = conf["hdf5_directory"] + conf["experiment_id"] + "_r" + str(args.run) + "_" + args.detector + ".h5"
-    output = f'{conf["hdf5_directory"]}{conf["experiment_id"]}_r{args.run:04d}_{args.detector}.h5'
+    output = f'{conf["hdf5_directory"]}{conf["experiment_id"]}_r{args.run:04d}_{args.detector}_step{args.step}.h5'
 
     print(output)
 
     print(f"Fetching radials...")
     radials_dict = get_radials(
         run_number=args.run, n_processes=args.n_processes,
-        start=args.start, stop=args.stop,
+        start=args.start, stop=args.stop,step=args.step,
         detector=args.detector
     )
     print(radials_dict.keys())
     print(np.sum(radials_dict['mask']))
 
+    print(f"Fetching waveforms and post-sample-intensities")
+    exp_id = "cxi101672626"
+    run = str(args.run)
 
+    re_fid = np.array(radials_dict["frame_id"])
+    seconds = re_fid[:,0]
+    nanoseconds = re_fid[:,1]
+    fiducials = re_fid[:,2]
+
+    nevents = len(seconds)
+
+    # waveforms = np.zeros((nevents, 4, 1000)) #waveform array is (4,1000) shape
+    # wftimes = np.zeros((nevents, 4, 1000))
+
+    #create arrays for DG2
+    dg2 = np.zeros((nevents))
+    digi = np.zeros((nevents))
+    # digi_times = np.zeros((nevents, 32000))
+    fee = np.zeros((nevents,6))
+
+    j = 0
+
+    #jumping to events by timestamp seemed slow, maybe because of using idx.
+    #Instead, lets just go through events in fastest order using smd,
+    #then match up the timestamp using numpy
+    #first, make a dictionary of reborn frame ids:
+    #
+    #
+    # NOTE: HH REWORKING
+    # NOTE: CURRENTLY DG2 ONLY FOR SPEED
+    re_fid_dict = {tuple(value): idx for idx, value in enumerate(re_fid)}
+    ds = psana.DataSource(f"exp={exp_id}:run={args.run}:smd")
+    dg2_det = psana.Detector("CXI-DG2-BMMON")
+    # digi_det = psana.Detector("qadc1") #
+    # fee_det = psana.Detector("FEEGasDetEnergy") # event code
+
+    for nevent,evt in enumerate(ds.events()):
+        evtId = evt.get(psana.EventId)
+        sec = evtId.time()[0]
+        ns = evtId.time()[1]
+        fid = evtId.fiducials()
+        #grab the reborn index associated with that timestamp
+        if tuple((sec,ns,fid)) in re_fid_dict:
+            idx = re_fid_dict[tuple((sec,ns,fid))]
+            sys.stdout.write('\r%d/%d   %d'%(j,nevents, idx))
+            sys.stdout.flush()
+            try:
+                dg2[idx] = dg2_det.get(evt).TotalIntensity()
+            except:
+                dg2[idx] = -1
+            # try:
+            #     digi[idx] = digi_det.raw(evt)[0][4800:5500].mean()
+            # except:
+            #     digi[idx] = -1
+            # try:
+            #     fee[idx,0] = fee_det.get(evt).f_11_ENRC()
+            #     fee[idx,1] = fee_det.get(evt).f_12_ENRC()
+            #     fee[idx,2] = fee_det.get(evt).f_21_ENRC()
+            #     fee[idx,3] = fee_det.get(evt).f_22_ENRC()
+            #     fee[idx,4] = fee_det.get(evt).f_63_ENRC()
+            #     fee[idx,5] = fee_det.get(evt).f_64_ENRC()
+            # except:
+            #     fee[idx,0] = -1
+            #     fee[idx,1] = -1
+            #     fee[idx,2] = -1
+            #     fee[idx,3] = -1
+            #     fee[idx,4] = -1
+                # fee[idx,5] = -1
+            j+=1
+            # if j>100: break
+
+    skip_list = ["sum","wsum","sum2"]
     print(f"Writing h5 file...")
     h5 = h5py.File(output, 'w')
     for key in radials_dict.keys():
-        print(key)
-        try:
-            h5.create_dataset(key, data = radials_dict[key])
-        except:
-            pass
+        if key not in skip_list:
+            print(key)
+            try:
+                h5.create_dataset(key, data = radials_dict[key])
+            except:
+                pass
+
+    # waveform and post_sample intensity fields to add
+    # Acqiris - failed attempt, deleted in latest version?
+    h5.create_dataset('/dg2', data=dg2)
+    # h5.create_dataset('/digitizer', data=digi)
+    # h5.create_dataset('/digi_wftimes', data=digi_times)
+    # h5.create_dataset('/FEE', data=fee)
     h5.close()
 
+    # print(radials_dict["sum"])
+    #
     # pw = pg.plot(title="Radials")
     # pw.addLegend()
     # c = ['r', 'g', 'b', 'c', 'm', 'y', 'w']
@@ -407,4 +512,3 @@ if __name__ == "__main__":
     # #otherwise the pyqtgraph plot will immediately close as the script exits.
     # #can also just put python -i script.py at the command line to enter interpreter state instead.
     # input()
-

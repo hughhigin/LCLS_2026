@@ -17,10 +17,9 @@ def default_config(detector='jungfrau'):
     # general configurations
     # required keys: experiment_id
     # possible keys: results_directory, cachedir
-    config = dict(experiment_id='cxil1005322', #*
+    config = dict(experiment_id='cxi101672626', #*
                   results_directory='results',
-                  # hdf5_directory="/sdf/data/lcls/ds/cxi/cxil1005322/results/cxil1005322/hdf5/", #*
-                  hdf5_directory="/sdf/data/lcls/ds/cxi/cxil1005322/results/hhig/practice_0603/results/reb_hdf5/", #*
+                  hdf5_directory="/sdf/data/lcls/ds/cxi/cxi101672626/results/hhig/results/reb_hdf5_noMasks/", #*
                   cachedir='cache/',
                   debug=1,
                   joblib_directory="results/joblib", #*
@@ -34,27 +33,12 @@ def default_config(detector='jungfrau'):
     #           motions: dictionary
     #                    example: {'epics_pv':'CXI:DS1:MMS:06.RBV', 'vector':[0, 0, 1e-3]}
 
-    # jungfrau_geometry_file = './geometry/jungfrau4M_AgBeh.json' #*
-    # jungfrau_geometry_file = './geometry/jungfrau4M_run5_recenter.json' #*
     # Hugh geom file
-    # jungfrau_geometry_file = './geometry/jungfrau4M_run7_AgBeh_powderFit_frame5000.json' #*
-    # Hugh masks
-    # jungfrau_masks = [
-    #     "./geometry/jungfrau4M_edges.mask",
-    #     # "./geometry/jungfrau4M_burnRing.mask",
-    #     "./geometry/jungfrau4M_run5_stdBelow20.mask",
-    # ] #*
     # 2024 files
-    jungfrau_geometry_file = './geometry/tom_agbe_run7_fitellipse_fixdistance.json' #*
-    jungfrau_masks = [
-        "geometry/edge_mask.mask",
-        "geometry/jungfrau_edges_belowstd-outer_abovestd-inner.mask",
-        "geometry/jungfrau_dark_spot.mask",
-    ] #*
+    jungfrau_geometry_file = './geometry/jungfrau_run46_AgBeh_powderFit.json' #*
     jungfrau4m = dict(pad_id='jungfrau4M',
                       geometry=PADGeometryList(filepath=jungfrau_geometry_file),
                       data_type='calib',
-                      mask=jungfrau_masks,
                       )
 
     # Hugh files
@@ -62,15 +46,13 @@ def default_config(detector='jungfrau'):
     # epix_masks = [
     #     "./geometry/epix_run7_all.mask",
     # ]
-    epix_geometry_file = './geometry/epix_recentered_postmove_r163.json'
-    epix_masks = [
-        "geometry/epix_edges.mask",
-        "geometry/epix_edges_innercircle_outercircle.mask",
-    ]
-    epix10ka_1 = dict(pad_id='epix10ka_1',
+    # epix_geometry_file = './geometry/epix_recentered_postmove_r163.json'
+    epix_geometry_file = './geometry/epix_recenter_run12.json'
+    # epix_geometry_file = './epix.json'
+    epix10ka_0 = dict(pad_id='epix10ka_0',
                       geometry=PADGeometryList(filepath=epix_geometry_file),
                       data_type='calib',
-                      mask=epix_masks,
+                      # mask=epix_masks,
                       )
     # epix100 = dict(pad_id='epix100',
     #                geometry=epix100_pad_geometry_list(detector_distance=1),
@@ -80,7 +62,7 @@ def default_config(detector='jungfrau'):
     if detector == "jungfrau":
         config['pad_detectors'] = [jungfrau4m]  # list allows for multiple detectors
     elif detector == "epix":
-        config['pad_detectors'] = [epix10ka_1]
+        config['pad_detectors'] = [epix10ka_0]
     else:
         print(f"ERROR: {detector} detector unknown. Either jungfrau or epix.")
 
@@ -115,19 +97,37 @@ def get_config(run_number, detector="jungfrau"):
     # This is the place to modify the config according to run number (e.g. detector geometry, etc.)
     config = default_config(detector)
     run = f"r{run_number:04d}"
-    results = (config['results_directory'] + '/runstats/'
-               + detector + '_' + run + '/')  # e.g. ./results/runstats/jungfrau_r0045/
+    results = (config['results_directory'] + '/runstats_noMasks/' # **
+               + detector + '_' + run + '_noMasks/')  # e.g. ./results/runstats/jungfrau_r0045/
     # config['runstats']['results_directory'] = results
     config['run_number'] = run_number
     config['runstats']['checkpoint_file'] = results + "checkpoints/" + run
     config['runstats']['log_file'] = results + "logs/" + run
-    if detector == "jungfrau":
-        if run_number in range(21,26):
-            config['pad_detectors'][0]['mask'].append('geometry/samantha_run21-25.mask')
+    # if detector == "jungfrau":
+        # if run_number in range(21,26):
+        #     config['pad_detectors'][0]['mask'].append('geometry/samantha_run21-25.mask')
         # if run_number in range(263,266):
             # config['pad_detectors'][0]['mask'].append('geometry/maryellen_run263-265.mask')
             # config['pad_detectors'][0]['mask'].append('geometry/jungfrau_diode_mask_run263-265.mask')
-    # elif detector == "epix":
+    if detector == "epix":
+        if (run_number >= 15) and (run_number <= 16):
+            epix_geometry_file = './geometry/epix_recenter_run15.json'
+        elif (run_number >= 20):
+            epix_geometry_file = './geometry/epix_recenter_run19.json'
+        else:
+            epix_geometry_file = './geometry/epix_recenter_run15.json'
+
+
+        epix_masks = [
+            "./geometry/epix_collagen_band.mask",
+            # "./geometry/epix_edges.mask",
+        ]
+        epix10ka_0 = dict(pad_id='epix10ka_0',
+                        geometry=PADGeometryList(filepath=epix_geometry_file),
+                        data_type='calib',
+                        # mask=epix_masks,
+                        )
+        config['pad_detectors'] = [epix10ka_0]
 
     config['runstats']['message_prefix'] = f"Run {run_number}: "
     return config

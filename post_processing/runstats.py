@@ -1,26 +1,60 @@
 #!/usr/bin/env python
-import argparse
+#
+import logging
+import os
+import threading
 import numpy as np
 import pyqtgraph as pg
+from scipy.signal import find_peaks, peak_prominences
+
+try:
+    from joblib import Parallel, delayed
+except ImportError:
+    Parallel = None
+    delayed = None
+from reborn import detector
+from reborn.dataframe import DataFrame
+from reborn.external.pyqtgraph import imview
+from reborn.fileio import misc
+from reborn.fileio.getters import ListFrameGetter
+import time
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+#
+import argparse
 import joblib
 from reborn.external.pyqtgraph import imview
 from reborn.external.lcls import LCLSFrameGetter
 from reborn import analysis
-from reborn.analysis import runstats
+from reborn.analysis.parallel import ParallelAnalyzer
 import config
+# import config_noMasks as config
 import reborn
 import os
 from scipy import ndimage
 
+from reborn.analysis import runstats
+from reborn.analysis.runstats import PixelHistogram
+
+logger = logging.getLogger(__name__)
+
 default_config = config.default_config()
 memory = joblib.Memory(default_config["joblib_directory"])
 
+# Define function for maxes frame stats
+def max_pixel_value(dataframe, raw_data_flat, mask_flat):
+    """Return the maximum unmasked pixel value for a frame."""
+    return np.max(raw_data_flat[mask_flat > 0])
+
+# Main function - **MODIFY WITH USER-FRAMESTATS
 @memory.cache(ignore=["n_processes"])
 def get_runstats(run_number=1, det="jungfrau", n_processes=1, max_frames=1e7,
                  max_sum=None, min_sum=None, start=0, stop=None, step=1,
-                 histogram=True, pixel_threshold=None):
+                 histogram=True, pixel_threshold=None): # NOTE: HH MADE HIST FALSE
     r"""Fetches some PAD statistics for a run.  See reborn docs."""
     conf = config.get_config(run_number, detector=det)
+    print(conf['runstats']['log_file'])
     if pixel_threshold is not None:
         print(pixel_threshold)
         pp_suffix = f"_pt_{pixel_threshold}"
@@ -67,10 +101,15 @@ def get_runstats(run_number=1, det="jungfrau", n_processes=1, max_frames=1e7,
         postprocessors=pp,
         photon_wavelength_pv=conf["photon_wavelength_pv"]
     )
+    # del runstats_conf["histogram_params"]
+
+    # Get padstats - NOTE: user_frame_stats required
     padstats = runstats.ParallelPADStats(
         framegetter=framegetter,  # max_sum=max_sum, min_sum=min_sum,
+        user_frame_stats = {"maxes": max_pixel_value},
         **runstats_conf
     )
+
     padstats.process_frames()
     stats = padstats.to_dict()
     if os.path.isfile(RUNNING_file):
@@ -85,7 +124,7 @@ def combine_runstats(run_numbers, max_frames=1e7):
     stats = get_runstats(run_number=run_numbers[0])
     stats["histogram"] = 0
     stats["sum"] = 0
-    stats["sum2"] = 0
+    # stats["sum2"] = 0
     stats["counts"] = 0
     stats["n_frames"] = 0
     stats["wavelengths"] = np.zeros(0)
@@ -109,6 +148,9 @@ def view_runstats(stats=None, geom=None, mask=None, hstgrm=True, **kwargs):
         geom (PADGeometryList): PAD geometry.
         mask (ndarray): PAD mask.
     """
+    for key in stats:
+        print(key)
+
     if stats is None:
         stats = get_runstats(**kwargs)
     if mask is not None:
@@ -158,7 +200,6 @@ def view_runstats(stats=None, geom=None, mask=None, hstgrm=True, **kwargs):
     #pv.start()
     '''
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-r", "--run", type=int, default=154, help="Run number")
@@ -167,13 +208,20 @@ if __name__ == "__main__":
     parser.add_argument("--start", type=int, default=0, help="start frame number")
     parser.add_argument("--stop",type=int, default=None, help="stop frame number")
     parser.add_argument("--step",type=int, default=1, help="number to skip between frames")
+    # parser.add_argument("--no_histogram", action="store_true", help="turn off histograms")
     parser.add_argument("--no_histogram", action="store_false", help="turn off histograms")
+    parser.add_argument("-t", "--pixel_threshold", type=float, default=None,
+                        help="Threshold runstats.")
+    parser.add_argument("--mask",type=str, default=None, nargs="*",
+                        help="pick .mask path")
     parser.add_argument(
         "--max_sum",
         type=float,
         default=None,
         help="Maximum sum to include image in mean calculation",
     )
+    parser.add_argument("--geom", action="store_true", default=False,
+                        help="Use conf geom")
     parser.add_argument(
         "--min_sum",
         type=float,
@@ -189,31 +237,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "-j", "--n_processes", type=int, default=12, help="Number of parallel processes"
     )
-    parser.add_argument("-t", "--pixel_threshold", type=float, default=-999,
-                        help="Threshold runstats.")
-    #parser.add_argument("--screenshots", action="store_true",help="save pyqt screenshots as jpg")
 
-    # Mask addition
-    parser.add_argument("--mask",type=str, default=None, nargs="*",
-                        help="pick .mask path")
-
-    # Geom from config
-    parser.add_argument("--geom", action="store_true", default=False,
-                        help="Use conf geom")
-
+    # ** PRINT
     args = parser.parse_args()
-    print(f"Fetching runstats...")
-    if args.pixel_threshold == -999:
-        args.pixel_threshold = None
+
+    if args.view:
         stats = get_runstats(
             run_number=args.run, det=args.detector, n_processes=args.n_processes,
             max_frames=args.max_events,
-        max_sum=args.max_sum, min_sum=args.min_sum,
-        start=args.start, stop=args.stop, step=args.step,
-        histogram=args.no_histogram,
-        pixel_threshold=args.pixel_threshold
-    )
-    if args.view:
+            max_sum=args.max_sum, min_sum=args.min_sum,
+            start=args.start, stop=args.stop, step=args.step,
+            histogram=args.no_histogram,
+            pixel_threshold=args.pixel_threshold,
+        )
+        for key in stats:
+            print(key)
         # Hugh - loading in masks, copied from write_radials_to_h5.py
 
         #grab all masks to perform binary dilation
@@ -235,6 +273,16 @@ if __name__ == "__main__":
         print("Viewing runstats...")
         view_runstats(stats, hstgrm=args.no_histogram, run=args.run, mask=mask_arr,
                       geom=geometry)
+    else:
+         stats = get_runstats(
+            run_number=args.run, det=args.detector, n_processes=args.n_processes,
+            max_frames=args.max_events,
+            max_sum=args.max_sum, min_sum=args.min_sum,
+            start=args.start, stop=args.stop, step=args.step,
+            histogram=args.no_histogram,
+            pixel_threshold=args.pixel_threshold,
+        )
+
 
 #    else:
 #        print("Saving screenshots...")

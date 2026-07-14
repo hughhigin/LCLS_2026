@@ -11,6 +11,7 @@ from reborn.analysis.parallel import ParallelAnalyzer
 from reborn.analysis.saxs import RadialProfiler
 # from reborn import detector
 import config
+# import config_noMasks as config
 import reborn
 import os
 import psana
