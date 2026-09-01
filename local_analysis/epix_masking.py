@@ -22,12 +22,14 @@ data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_reMask/")
 buff_run = 61
 sample_run = 63
 
+noJet_run = 66
 buff_run = 67
 sample_run = 69
 
 # buff_run = 72
 # sample_run = 74
 
+noJet_h5e_path = data_dir / f"{exp}_r{noJet_run:04d}_epix.h5"
 buff_h5e_path = data_dir / f"{exp}_r{buff_run:04d}_epix.h5"
 sample_h5e_path = data_dir / f"{exp}_r{sample_run:04d}_epix.h5"
 
@@ -38,6 +40,14 @@ plt.rcParams["font.sans-serif"] = ["Arial"]
 plt.rcParams.update({"font.size": 14})
 
 # %% Load mean detector values from radials
+
+with h5py.File(noJet_h5e_path, "r") as h5e:
+    noJet_radials = h5e["/mean"][:]
+    noJet_dg2 = h5e["/dg2"][:]
+    noJet_qad_svd1 = h5e["/qad_svd1"][:]
+    noJet_radial_offset = h5e["/radial_offset"]
+    noJet_qad_offset = h5e["/qad_offset"]
+    q = h5e["/q_bins"][:]
 
 with h5py.File(buff_h5e_path, "r") as h5e:
     buff_radials = h5e["/mean"][:]
@@ -58,10 +68,11 @@ with h5py.File(sample_h5e_path, "r") as h5e:
 # %% Check diode correlations: buffer
 
 # 4 panel figure of correlations: Dg2
+noJetE_tmeans = noJet_radials.mean(axis=1)
 buffE_tmeans = buff_radials.mean(axis=1)
 atE_tmeans = at_radials.mean(axis=1)
 
-cfig, caxs = plt.subplots(2, 2, layout="constrained")
+cfig, caxs = plt.subplots(2, 3, layout="constrained")
 caxs[0, 0].scatter(buff_dg2, buffE_tmeans)
 caxs[0, 0].set_ylabel("dg2")
 caxs[0, 0].set_ylim([-0.5 * 1e8, 2 * 1e8])
@@ -76,6 +87,12 @@ caxs[0, 1].set_ylim([-0.5 * 1e8, 3 * 1e8])
 caxs[1, 1].scatter(at_qad_svd1, atE_tmeans)
 caxs[1, 1].set_ylim([-0.5 * 1e8, 3 * 1e8])
 caxs[1, 1].set_xlabel(f"Epix, run {sample_run}")
+
+caxs[0, 2].scatter(noJet_dg2, noJetE_tmeans)
+caxs[0, 2].set_ylim([-0.5 * 1e8, 3 * 1e8])
+caxs[1, 2].scatter(noJet_qad_svd1, noJetE_tmeans)
+caxs[1, 2].set_ylim([-0.5 * 1e8, 3 * 1e8])
+caxs[1, 2].set_xlabel(f"Epix, run {noJet_run}")
 
 # Correlation coefficients
 
@@ -169,7 +186,9 @@ plt.plot(vd, twoLine(vd, *p))
 
 # %% Radials
 
-r_step = 100
+qad_thresh = 0.6
+r_step = 10
+
 for i in range(0, buff_radials.shape[0], r_step):
     if buff_qad_svd1[i] > qad_thresh:
         # plt.plot(q, (buff_radials[i] - coefs[0]) / buff_qad_svd1[i])  # No normalization
@@ -189,9 +208,6 @@ buff_mean = np.nanmean(
     axis=0,
 )
 
-# %% Radials
-qad_thresh = 0.6
-r_step = 10
 for i in range(0, at_radials.shape[0], r_step):
     if at_qad_svd1[i] > qad_thresh:
         plt.plot(
@@ -212,13 +228,70 @@ sample_mean = np.nanmean(
     ),
     axis=0,
 )
+
+dg2_thresh = 0
+for i in range(0, noJet_radials.shape[0], r_step):
+    if noJet_qad_svd1[i] > qad_thresh:
+        plt.plot(
+            q * 1e-10, (noJet_radials[i] - coefs[0]) / noJet_qad_svd1[i]
+        )  # No normalization
+        # plt.plot(q, (at_radials[i] - coefs[0]) / at_dg2[i])  # No normalization
+        # plt.plot(q, radials[i]/(buff_qad_svd1[i] - rcoefs[0]))  # No normalization
+        # plt.plot(q, (radials[i])/buff_qad_svd1[i])  # No normalization
+        # plt.plot(q, (radials[i]))  # No normalization
+
+noJet_mean = np.nanmean(
+    np.array(
+        [
+            (radial - coefs[0]) / noJet_qad
+            for radial, noJet_qad in zip(noJet_radials, noJet_qad_svd1)
+            # if (noJet_qad > qad_thresh)
+            #
+            # radial / dg2
+            # for radial, dg2 in zip(noJet_radials, noJet_dg2)
+            # if (dg2 > qad_thresh)
+        ]
+    ),
+    axis=0,
+)
+
+# %% Troubleshooting noJet
+
+for radial, dg2 in zip(noJet_radials, noJet_dg2):
+    if np.isnan(any(radial / dg2)):
+        print(f"Radial: {radial}, dg2: {dg2}")
+    else:
+        plt.plot(radial / dg2)
+
 # %% Buffer subtraction attempts
 
-plt.plot(buff_mean)
-plt.plot(sample_mean)
+noJet_dg2_vals = noJet_dg2[noJet_dg2 > dg2_thresh]
+buff_dg2_vals = buff_dg2[buff_dg2 > dg2_thresh]
+buff_qad_vals = buff_qad_svd1[buff_qad_svd1 > qad_thresh]
+
+noJet_buff_scaled = noJet_mean / np.mean(noJet_mean) * np.mean(buff_mean)
+noJet_buff_scaled = noJet_buff_scaled - np.max(noJet_buff_scaled - buff_mean)
+
+noJet_sample_scaled = noJet_mean / np.mean(noJet_mean) * np.mean(sample_mean)
+noJet_sample_scaled = noJet_buff_scaled - np.max(noJet_sample_scaled - sample_mean)
+
+plt.plot(buff_mean, label="Buffer")
+plt.plot(sample_mean, label="Sample")
+# plt.plot(noJet_mean * np.mean(buff_dg2_vals) / np.mean(buff_qad_vals), label="No Jet")
+# plt.plot(noJet_mean / np.mean(noJet_mean) * np.mean(buff_mean), label="No Jet")
+plt.plot(
+    (noJet_mean / np.mean(noJet_mean) * np.mean(buff_mean)) - noJet_offset,
+    label="No Jet",
+)
+# plt.plot(noJet_mean / np.mean(noJet_mean) * np.mean(sample_mean), label="No Jet")
+plt.legend()
+plt.title("qad normalization, arbitrary noJet scale")
 
 # %% sub
 
+buff_sub = buff_mean - noJet_buff_scaled
+sample_sub = sample_mean - noJet_sample_scaled
+
 plt.title(f"Naive subtraction, run {sample_run}")
-plt.plot(q / 1e10, sample_mean - buff_mean)
+plt.plot(q / 1e10, sample_sub - buff_sub)
 plt.xlabel(r"q $\AA$$^{-1}$")
