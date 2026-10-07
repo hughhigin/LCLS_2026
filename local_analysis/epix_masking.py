@@ -6,6 +6,7 @@
 from pathlib import Path
 import pickle
 import h5py
+import pandas as pd
 
 # Fitting
 import numpy as np
@@ -26,8 +27,8 @@ noJet_run = 66
 buff_run = 67
 sample_run = 69
 
-# buff_run = 72
-# sample_run = 74
+buff_run = 72
+sample_run = 74
 
 noJet_h5e_path = data_dir / f"{exp}_r{noJet_run:04d}_epix.h5"
 buff_h5e_path = data_dir / f"{exp}_r{buff_run:04d}_epix.h5"
@@ -265,6 +266,7 @@ for radial, dg2 in zip(noJet_radials, noJet_dg2):
 
 # %% Buffer subtraction attempts
 
+
 noJet_dg2_vals = noJet_dg2[noJet_dg2 > dg2_thresh]
 buff_dg2_vals = buff_dg2[buff_dg2 > dg2_thresh]
 buff_qad_vals = buff_qad_svd1[buff_qad_svd1 > qad_thresh]
@@ -274,6 +276,11 @@ noJet_buff_scaled = noJet_buff_scaled - np.max(noJet_buff_scaled - buff_mean)
 
 noJet_sample_scaled = noJet_mean / np.mean(noJet_mean) * np.mean(sample_mean)
 noJet_sample_scaled = noJet_buff_scaled - np.max(noJet_sample_scaled - sample_mean)
+
+noJet_offset = np.min(
+    buff_mean - (noJet_mean / np.mean(noJet_mean) * np.mean(buff_mean))
+)
+noJet_offset = 0
 
 plt.plot(buff_mean, label="Buffer")
 plt.plot(sample_mean, label="Sample")
@@ -293,5 +300,22 @@ buff_sub = buff_mean - noJet_buff_scaled
 sample_sub = sample_mean - noJet_sample_scaled
 
 plt.title(f"Naive subtraction, run {sample_run}")
-plt.plot(q / 1e10, sample_sub - buff_sub)
+plt.plot(q / 1e10, (sample_sub - buff_sub) / (2 * np.mean(noJet_mean)))
+plt.plot(q / 1e10, (sample_mean / noJet_mean) - (buff_mean / noJet_mean))
+
+inds = ~np.isinf(sample_sub / noJet_mean)
+
+
 plt.xlabel(r"q $\AA$$^{-1}$")
+
+# %% save csvs
+
+sub_csv_name = "AT48_sub_curve_v0.csv"
+sub_data = (sample_sub - buff_sub) / (2 * np.mean(noJet_mean))
+sub_df = pd.DataFrame({"q": q[inds] / 1e10, "I": sub_data[inds]})
+sub_df.to_csv(data_dir / sub_csv_name, index=False)
+
+scale_csv_name = "AT48_scale_curve_v0.csv"
+scale_data = (sample_mean / noJet_mean) - (buff_mean / noJet_mean)
+scale_df = pd.DataFrame({"q": q[inds] / 1e10, "I": scale_data[inds]})
+scale_df.to_csv(data_dir / scale_csv_name, index=False)
