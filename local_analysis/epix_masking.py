@@ -11,8 +11,10 @@ import pandas as pd
 # Fitting
 import numpy as np
 from numpy.polynomial.polynomial import polyfit
-from sklearn.decomposition import PCA, TruncatedSVD
+
+# from sklearn.decomposition import PCA, TruncatedSVD
 from scipy.optimize import curve_fit
+from reborn import source, detector, const
 
 import matplotlib.pyplot as plt
 
@@ -20,15 +22,16 @@ import matplotlib.pyplot as plt
 exp = "cxi101672626"
 data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_reMask/")
 
+noJet_run = 60
 buff_run = 61
 sample_run = 63
 
-noJet_run = 66
-buff_run = 67
-sample_run = 69
+# noJet_run = 66
+# buff_run = 67
+# sample_run = 69
 
-buff_run = 72
-sample_run = 74
+# buff_run = 72
+# sample_run = 74
 
 noJet_h5e_path = data_dir / f"{exp}_r{noJet_run:04d}_epix.h5"
 buff_h5e_path = data_dir / f"{exp}_r{buff_run:04d}_epix.h5"
@@ -165,7 +168,7 @@ plt.scatter(
 plt.plot(buff_qad_svd1, buff_qad_svd1 * coefs[1] + coefs[0], "k", lw=2)
 
 
-# %% Section Name
+# Fitting to medians
 
 
 # Fit to two lines
@@ -187,11 +190,26 @@ plt.plot(vd, twoLine(vd, *p))
 
 # %% Radials
 
-qad_thresh = 0.6
+
+# %% sum_peak_buff filtering list from lois
+
+buff_ind_file = f"Hugh{buff_run}.txt"
+buff_ind_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
+# buff_inds = buff_ind_df.iloc[:, 0].to_numpy() - 1
+buff_inds = buff_ind_df.iloc[:, 0].to_numpy()
+
+sample_ind_file = f"Hugh{sample_run}.txt"
+sample_ind_df = pd.read_csv(data_dir / sample_ind_file, header=None, sep=" ")
+# sample_inds = sample_ind_df.iloc[:, 0].to_numpy() - 1
+sample_inds = sample_ind_df.iloc[:, 0].to_numpy()
+
+qad_thresh = 0.6  # Sets minimum backscatter (I0 * jet width)
+dg2_thresh = 0
 r_step = 10
 
 for i in range(0, buff_radials.shape[0], r_step):
-    if buff_qad_svd1[i] > qad_thresh:
+    # if buff_qad_svd1[i] > qad_thresh:
+    if i in buff_inds:
         # plt.plot(q, (buff_radials[i] - coefs[0]) / buff_qad_svd1[i])  # No normalization
         plt.plot(q, (buff_radials[i] - coefs[0]) / buff_dg2[i])  # No normalization
         # plt.plot(q, radials[i]/(buff_qad_svd1[i] - rcoefs[0]))  # No normalization
@@ -202,15 +220,27 @@ buff_mean = np.nanmean(
     np.array(
         [
             (radial - coefs[0]) / buff_qad
-            for radial, buff_qad in zip(buff_radials, buff_qad_svd1)
-            if (buff_qad > qad_thresh)
+            for ii, (radial, buff_qad) in enumerate(zip(buff_radials, buff_qad_svd1))
+            if (ii in buff_inds)
         ]
     ),
     axis=0,
 )
+# buff_mean = np.nanmean(
+#     np.array(
+#         [
+#             (radial - coefs[0]) / buff_qad
+#             for radial, buff_qad in zip(buff_radials, buff_qad_svd1)
+#             if (buff_qad > qad_thresh)
+#         ]
+#     ),
+#     axis=0,
+# )
+
 
 for i in range(0, at_radials.shape[0], r_step):
-    if at_qad_svd1[i] > qad_thresh:
+    # if at_qad_svd1[i] > qad_thresh:
+    if i in sample_inds:
         plt.plot(
             q * 1e-10, (at_radials[i] - coefs[0]) / at_qad_svd1[i]
         )  # No normalization
@@ -223,12 +253,22 @@ sample_mean = np.nanmean(
     np.array(
         [
             (radial - coefs[0]) / at_qad
-            for radial, at_qad in zip(at_radials, at_qad_svd1)
-            if (at_qad > qad_thresh)
+            for ii, (radial, at_qad) in enumerate(zip(at_radials, at_qad_svd1))
+            if (ii in sample_inds)
         ]
     ),
     axis=0,
 )
+# sample_mean = np.nanmean(
+#     np.array(
+#         [
+#             (radial - coefs[0]) / at_qad
+#             for radial, at_qad in zip(at_radials, at_qad_svd1)
+#             if (at_qad > qad_thresh)
+#         ]
+#     ),
+#     axis=0,
+# )
 
 dg2_thresh = 0
 for i in range(0, noJet_radials.shape[0], r_step):
@@ -310,12 +350,16 @@ plt.xlabel(r"q $\AA$$^{-1}$")
 
 # %% save csvs
 
-sub_csv_name = "AT48_sub_curve_v0.csv"
+# sub_csv_name = "AT48_sub_curve_v0.csv"
+# sub_csv_name = "AT48_sub_curve_spb.csv"
+sub_csv_name = "AT48_sub_curve_spb_mat.csv"
 sub_data = (sample_sub - buff_sub) / (2 * np.mean(noJet_mean))
 sub_df = pd.DataFrame({"q": q[inds] / 1e10, "I": sub_data[inds]})
 sub_df.to_csv(data_dir / sub_csv_name, index=False)
 
-scale_csv_name = "AT48_scale_curve_v0.csv"
+# scale_csv_name = "AT48_scale_curve_v0.csv"
+# scale_csv_name = "AT48_scale_curve_spb.csv"
+scale_csv_name = "AT48_scale_curve_spb_mat.csv"
 scale_data = (sample_mean / noJet_mean) - (buff_mean / noJet_mean)
 scale_df = pd.DataFrame({"q": q[inds] / 1e10, "I": scale_data[inds]})
 scale_df.to_csv(data_dir / scale_csv_name, index=False)
