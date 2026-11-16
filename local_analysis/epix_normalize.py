@@ -19,6 +19,7 @@ from numpy.polynomial.polynomial import polyfit
 from scipy.optimize import curve_fit
 from scipy import interpolate, signal
 from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.linear_model import RANSACRegressor
 
 import matplotlib.pyplot as plt
 import bioxtasraw.RAWAPI as raw
@@ -34,6 +35,7 @@ exp = "cxi101672626"
 # data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_reMask/")
 # data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_tweaks/")
 data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_adjustXY/")
+# data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_adjustXY_2214mm/")
 # data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_reMask_v1/")
 ref_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/ref_profiles/")
 det_means_thresh = 1e7
@@ -47,7 +49,220 @@ dg2_bin_width = 5000
 dg2_bin_edges = np.arange(0, dg2_thresh + dg2_bin_width, dg2_bin_width)
 dg2_bin_centers = dg2_bin_edges[:-1] + (dg2_bin_edges[1:] - dg2_bin_edges[:-1]) / 2
 
-# %% Try fresh
+# %% Try fresh: spb selection, diode normalization (double scale)
+
+labels = ["AT25_100uM", "AT25_1mM", "AT48_250uM", "SAMII_static"]
+
+# set_name = "AT25 100uM"
+# lnum = 0
+# noJet_run = 60
+# buff_run = 61
+# sample_run = 63
+# # set_name = "AT25 1mM"
+# noJet_run = 66
+# buff_run = 67
+# sample_run = 69
+lnum = 2
+set_name = "AT48 250uM"
+noJet_run = 66
+buff_run = 72
+sample_run = 74
+# set_name = "SAM-II static"
+# noJet_run = 66
+# buff_run = 101
+# sample_run = 99
+
+noJet_h5e_path = data_dir / f"{exp}_r{noJet_run:04d}_epix.h5"
+buff_h5e_path = data_dir / f"{exp}_r{buff_run:04d}_epix.h5"
+sample_h5e_path = data_dir / f"{exp}_r{sample_run:04d}_epix.h5"
+
+with h5py.File(noJet_h5e_path, "r") as h5e:
+    noJet_radials = h5e["/mean"][:]
+    noJet_dg2 = h5e["/dg2"][:]
+    noJet_qad_svd1 = h5e["/qad_svd1"][:]
+    noJet_q = h5e["/q_bins"][:]
+with h5py.File(buff_h5e_path, "r") as h5e:
+    buff_radials = h5e["/mean"][:]
+    buff_dg2 = h5e["/dg2"][:]
+    buff_qad_svd1 = h5e["/qad_svd1"][:]
+    buff_q = h5e["/q_bins"][:]
+with h5py.File(sample_h5e_path, "r") as h5e:
+    sample_radials = h5e["/mean"][:]
+    sample_dg2 = h5e["/dg2"][:]
+    sample_qad_svd1 = h5e["/qad_svd1"][:]
+    sample_q = h5e["/q_bins"][:]
+
+# Get filter bools for noJet, buffer, and sample files
+noq_inds = sample_radials.sum(axis=0) == 0
+q_inds = ~noq_inds
+
+noJet_bools = noJet_dg2 > dg2_thresh
+# Normalize by spb
+buff_ind_file = f"Hugh{buff_run}.txt"
+buff_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
+buff_inds = buff_df.iloc[:, 0].to_numpy() - 1
+buff_spb = buff_df.iloc[:, 2].to_numpy()
+buff_bools = np.zeros(buff_dg2.shape, dtype="bool")
+buff_bools[buff_inds] = True
+
+sample_ind_file = f"Hugh{sample_run}.txt"
+sample_df = pd.read_csv(data_dir / sample_ind_file, header=None, sep=" ")
+sample_inds = sample_df.iloc[:, 0].to_numpy() - 1
+sample_spb = sample_df.iloc[:, 2].to_numpy()
+sample_bools = np.zeros(sample_dg2.shape, dtype="bool")
+sample_bools[sample_inds] = True
+
+# noJet_dg2 = noJet_dg2 - dg2_thresh
+# buff_dg2 = buff_dg2 - dg2_thresh
+# sample_dg2 = sample_dg2 - dg2_thresh
+
+# Get noJet slope
+noJet_qadMean = noJet_qad_svd1[noJet_bools].mean()
+noJet_detMeans = noJet_radials.mean(axis=1)
+ransac = RANSACRegressor()
+ransac.fit(
+    noJet_dg2[noJet_bools].reshape(-1, 1), noJet_detMeans[noJet_bools].reshape(-1, 1)
+)
+est = ransac.estimator_
+noJet_dg2_m = est.coef_[0][0]
+noJet_dg2_b = est.intercept_[0]
+
+buff_radials_dg2 = (buff_radials - noJet_dg2_b) / noJet_dg2_m
+sample_radials_dg2 = (sample_radials - noJet_dg2_b) / noJet_dg2_m
+
+# (sample_detMeans[sample_bools] - noJet_dg2_b)
+# / noJet_dg2_m
+# / (sample_qad_svd1[sample_bools] - noJet_qadMean),
+
+buff_qad = buff_qad_svd1[buff_bools, np.newaxis] - noJet_qadMean
+sample_qad = sample_qad_svd1[sample_bools, np.newaxis] - noJet_qadMean
+
+buff_mean = (buff_radials_dg2[buff_bools, :] / buff_qad).mean(axis=0)
+sample_mean = (sample_radials_dg2[sample_bools, :] / sample_qad).mean(axis=0)
+
+q = sample_q[q_inds]
+buff_mean = buff_mean[q_inds]
+sample_mean = sample_mean[q_inds]
+sub = sample_mean - buff_mean
+
+# plt.plot(buff_mean)
+# plt.plot(sample_mean)
+plt.plot(sample_mean - buff_mean)
+
+# save
+i_scale = 1e-6
+inds = ~np.isinf(sub) & (sub > 0)
+sub_csv_name = f"{labels[lnum]}_sub_qad_dg2_tweak.csv"
+sub_df = pd.DataFrame({"q": q[inds] / 1e10, "I": sub[inds] * i_scale})
+sub_df.to_csv(data_dir / sub_csv_name, index=False)
+
+inds = ~np.isinf(sample_mean) & (sample_mean > 0)
+sample_csv_name = f"{labels[lnum]}_qad_dg2_tweak.csv"
+sample_df = pd.DataFrame({"q": q[inds] / 1e10, "I": sample_mean[inds] * i_scale})
+sample_df.to_csv(data_dir / sample_csv_name, index=False)
+
+inds = ~np.isinf(buff_mean) & (buff_mean > 0)
+buff_csv_name = f"{labels[lnum]}_buff_qad_dg2_tweak.csv"
+buff_df = pd.DataFrame({"q": q[inds] / 1e10, "I": buff_mean[inds] * i_scale})
+buff_df.to_csv(data_dir / buff_csv_name, index=False)
+
+
+# %% Plots from loaded data
+
+# TBD: Implement offset from noJet background
+# i_scale = 1e-10
+i_scale = 1e-6
+
+labels = ["AT25_100uM", "AT25_1mM", "AT48_250uM", "SAMII_static"]
+noJet_runs = [60, 66, 66, 80]
+buff_runs = [61, 67, 72, 101]
+sample_runs = [63, 69, 74, 99]
+# fudges = [0.5, 1.04, 0.92, 1]
+fudges = [1, 1, 1, 1]
+# fudges = [20, 38, 32, 13]  # QAD fudges
+# buff_scales = [0.994, 1.5, 0.9415, 0.994] # Manual fudge numbers
+# fudges= [1, 1.82, 0.92, 1]
+cvals = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
+ref_names = [
+    "AT25-100uM_LCLS_NaCl-150mM_MOPS-10mM_SAXS_HFLUX.dat",
+    "AT25-1mM_LCLS_NaCl-150mM_MOPS-10mM_SAXS_HFLUX_scale1mM.dat",
+    "dna_lp_03B_S017_B016_sub_scale.dat",
+    "SAXS_200uMSAM2_100mMNa_1mMMg_Ligand.dat",
+]
+
+ref_cvals = ["darkblue", "sienna", "darkgreen", "darkred"]
+# jfig, jaxs = plt.subplots(len(labels), figsize=(5, 10), layout="constrained")
+# sfig, saxs = plt.subplots(len(labels), figsize=(5, 10), layout="constrained")
+approx_noJet_mean = 5e7
+
+jfig, jaxs = plt.subplots(2, 2, figsize=(10, 10), layout="constrained")
+sfig, saxs = plt.subplots(2, 2, figsize=(10, 10), layout="constrained")
+rfig, raxs = plt.subplots(2, 2, figsize=(10, 10), layout="constrained")
+
+for lnum in range(len(labels)):
+    jax = jaxs.ravel()[lnum]
+    jax.set_title(f"{labels[lnum]} subtraction")
+    sax = saxs.ravel()[lnum]
+    sax.set_title(f"{labels[lnum]} SPB normalized traces")
+    rax = raxs.ravel()[lnum]
+    rax.set_title(f"{labels[lnum]} SPB normalized residuals")
+    noJet_run = noJet_runs[lnum]
+    buff_run = buff_runs[lnum]
+    sample_run = sample_runs[lnum]
+    buff_scale = buff_scales[lnum]
+    # buff_scale = 1
+    ref_path = ref_dir / ref_names[lnum]
+    ref_prof = raw.load_profiles(ref_path)[0]
+
+    # %% Subtraction
+    sub_csv_name = f"{labels[lnum]}_sub_qad_dg2.csv"
+    sub_df = pd.read_csv(data_dir / sub_csv_name)
+    sub_q = sub_df["q"]
+    sub = sub_df["I"]
+
+    sax.plot(sample_mean)
+    sax.plot(buff_mean)
+
+    # Take away unclear q values
+    qscale = q / 1e10
+    qref_all = ref_prof.getQ()
+    qref_trim_inds = (qref_all >= np.min(qscale)) & (qref_all <= np.max(qscale))
+    qref_trim = qref_all[qref_trim_inds]
+    iref_trim = ref_prof.getI()[qref_trim_inds]
+    qref_mat = np.repeat(qref_trim[:, np.newaxis], len(qscale), axis=1)
+    q_diff2 = (qscale - qref_mat) ** 2
+    qbin_val_inds = q_diff2 == np.min(q_diff2, axis=1)[:, np.newaxis]
+    qbin_group_inds = q_diff2 == np.min(q_diff2, axis=0)
+
+    qmin_c = 0.023
+    qmax_c = 0.04
+    qinds_c = (q >= 1e10 * qmin_c) & (q <= 1e10 * qmax_c)
+    sub = sub * iref_trim.mean() / sub.mean()
+
+    jax.plot(q / 1e10, sub, color=cvals[lnum], alpha=0.3)
+    jax.plot(q[qinds_c] / 1e10, sub[qinds_c], color=cvals[lnum])
+    jax.plot(ref_prof.getQ(), ref_prof.getI(), color=ref_cvals[lnum], lw=2)
+
+    jax.set_xlim([min(q / 1e10), max(q / 1e10)])
+    jax.set_ylim([min(sub), max(sub)])
+
+    # Look at residual plots
+
+    qbin_vals = np.zeros(qref_trim.shape)
+    ibin_vals = np.zeros(qref_trim.shape)
+    for qct, qval_ind in enumerate(qbin_val_inds):
+        qbin_vals[qct] = qscale[qval_ind][0]
+        ibin_vals[qct] = sub[qbin_group_inds[qct]].mean()
+
+    rax.plot(qbin_vals, iref_trim - ibin_vals, color=cvals[lnum])
+
+    jfig.show()
+    # sfig.show()
+    # rfig.show()
+    # break
+
+
+# %% Try fresh: diode selection, diode normalization
 
 set_name = "AT25 100uM"
 noJet_run = 60
@@ -150,6 +365,98 @@ q = sample_q[q_inds]
 buff_mean = buff_mean[q_inds]
 sample_mean = sample_mean[q_inds]
 
+# %% Try fresh: spb selection, empirical_peak normalization
+
+set_name = "AT25 100uM"
+noJet_run = 60
+buff_run = 61
+sample_run = 63
+# set_name = "AT48 250uM"
+# noJet_run = 66
+# buff_run = 72
+# sample_run = 74
+
+noJet_h5e_path = data_dir / f"{exp}_r{noJet_run:04d}_epix.h5"
+buff_h5e_path = data_dir / f"{exp}_r{buff_run:04d}_epix.h5"
+sample_h5e_path = data_dir / f"{exp}_r{sample_run:04d}_epix.h5"
+
+with h5py.File(noJet_h5e_path, "r") as h5e:
+    noJet_radials = h5e["/mean"][:]
+    noJet_dg2 = h5e["/dg2"][:]
+    noJet_qad_svd1 = h5e["/qad_svd1"][:]
+    noJet_q = h5e["/q_bins"][:]
+with h5py.File(buff_h5e_path, "r") as h5e:
+    buff_radials = h5e["/mean"][:]
+    buff_dg2 = h5e["/dg2"][:]
+    buff_qad_svd1 = h5e["/qad_svd1"][:]
+    buff_q = h5e["/q_bins"][:]
+with h5py.File(sample_h5e_path, "r") as h5e:
+    sample_radials = h5e["/mean"][:]
+    sample_dg2 = h5e["/dg2"][:]
+    sample_qad_svd1 = h5e["/qad_svd1"][:]
+    sample_q = h5e["/q_bins"][:]
+
+# Get filter bools for noJet, buffer, and sample files
+noq_inds = sample_radials.sum(axis=0) == 0
+q_inds = ~noq_inds
+
+noJet_bools = noJet_dg2 > dg2_thresh
+
+# Normalize by spb
+buff_ind_file = f"Hugh{buff_run}.txt"
+buff_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
+buff_inds = buff_df.iloc[:, 0].to_numpy() - 1
+buff_spb = buff_df.iloc[:, 2].to_numpy()
+
+sample_ind_file = f"Hugh{sample_run}.txt"
+sample_df = pd.read_csv(data_dir / sample_ind_file, header=None, sep=" ")
+sample_inds = sample_df.iloc[:, 0].to_numpy() - 1
+sample_spb = sample_df.iloc[:, 2].to_numpy()
+
+noJet_dg2 = noJet_dg2 - dg2_thresh
+buff_dg2 = buff_dg2 - dg2_thresh
+sample_dg2 = sample_dg2 - dg2_thresh
+
+# Get noJet slope
+noJet_detMeans = noJet_radials.mean(axis=1)
+ransac = RANSACRegressor()
+ransac.fit(
+    noJet_dg2[noJet_bools].reshape(-1, 1), noJet_detMeans[noJet_bools].reshape(-1, 1)
+)
+est = ransac.estimator_
+noJet_dg2_m = est.coef_[0][0]
+noJet_dg2_b = est.intercept_[0]
+
+buff_radials = buff_radials - noJet_dg2_b
+sample_radials = sample_radials - noJet_dg2_b
+
+# Normalize by spb
+buff_ind_file = f"Hugh{buff_run}.txt"
+buff_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
+buff_inds = buff_df.iloc[:, 0].to_numpy() - 1
+buff_spb = buff_df.iloc[:, 2].to_numpy()
+
+sample_ind_file = f"Hugh{sample_run}.txt"
+sample_df = pd.read_csv(data_dir / sample_ind_file, header=None, sep=" ")
+sample_inds = sample_df.iloc[:, 0].to_numpy() - 1
+sample_spb = sample_df.iloc[:, 2].to_numpy()
+
+buff_mean = np.nanmean(
+    np.array([buff_radials[idx] / buff_spb[ii] for ii, idx in enumerate(buff_inds)]),
+    axis=0,
+)
+
+sample_mean = np.nanmean(
+    np.array(
+        [sample_radials[idx] / sample_spb[ii] for ii, idx in enumerate(sample_inds)]
+    ),
+    axis=0,
+)
+
+q = sample_q[q_inds]
+buff_mean = buff_mean[q_inds]
+sample_mean = sample_mean[q_inds]
+
 
 # %% DG2 noJet scaling
 
@@ -175,7 +482,7 @@ labels = ["AT25_100uM", "AT25_1mM", "AT48_250uM", "SAMII_static"]
 noJet_runs = [60, 66, 66, 80]
 buff_runs = [61, 67, 72, 101]
 sample_runs = [63, 69, 74, 99]
-# buff_scales = [0.994, 0.9985, 0.994, 0.994] # Lois numbers?
+# buff_scales = [1, 1, 0.994, 1] # Lois numbers?
 buff_scales = [1.1451, 1.0485, 0.9415, 0.994]  # Manual check numbers
 fudges = [0.5, 1.04, 0.92, 1]
 # fudges = [20, 38, 32, 13]  # QAD fudges
@@ -566,6 +873,7 @@ for lnum in range(len(labels)):
     # sample_radials = sample_deletes
 
     # open: Hugh{buff_run}
+
     buff_ind_file = f"Hugh{buff_run}.txt"
     buff_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
     buff_inds = buff_df.iloc[:, 0].to_numpy() - 1

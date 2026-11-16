@@ -43,19 +43,19 @@ data_dir = Path("/home/hugh/beamtime_processing/LCLS_20260629/epix_adjustXY/")
 # Filter parameters, run selection
 # set_name = "AT25 100uM"
 # run_numbers = [60, 61, 63]
-# set_name = "AT25 1mM"
-# run_numbers = [66, 67, 69]
-set_name = "AT48 250uM"
-run_numbers = [66, 72, 74]
+set_name = "AT25 1mM"
+run_numbers = [66, 67, 69]
+# set_name = "AT48 250uM"
+# run_numbers = [66, 72, 74]
 det_means_thresh = 1e7
 qad_thresh = 1.5
 qad_m_avg = 5.5e-06
 qad_b_avg = 0.3
 slope_thresh = 0.8
 
-dg2_thresh = 100
+# dg2_thresh = 100
 # dg2_thresh = 1e5
-# dg2_thresh = 2e5
+dg2_thresh = 2e5
 dg2_bin_width = 5000
 dg2_bin_edges = np.arange(0, dg2_thresh + dg2_bin_width, dg2_bin_width)
 dg2_bin_centers = dg2_bin_edges[:-1] + (dg2_bin_edges[1:] - dg2_bin_edges[:-1]) / 2
@@ -82,8 +82,8 @@ with h5py.File(sample_h5e_path, "r") as h5e:
 
 # Get filter bools for noJet, buffer, and sample files
 noJet_bools = noJet_dg2 > dg2_thresh
-buff_bools = buff_dg2 > dg2_thresh
-sample_bools = sample_dg2 > dg2_thresh
+# buff_bools = buff_dg2 > dg2_thresh
+# sample_bools = sample_dg2 > dg2_thresh
 
 # buff_qad_maxes = [
 #     np.max(buff_qad_svd1[(buff_dg2 > ij) & (buff_dg2 < ik)])
@@ -106,6 +106,22 @@ sample_bools = sample_dg2 > dg2_thresh
 #     & (sample_qad_svd1 < sample_dg2 * sample_max_m + sample_max_b)
 #     & (sample_qad_svd1 > slope_thresh * (sample_dg2 * sample_max_m + sample_max_b))
 # )
+#
+# Normalize by spb
+buff_ind_file = f"Hugh{run_numbers[1]}.txt"
+buff_df = pd.read_csv(data_dir / buff_ind_file, header=None, sep=" ")
+buff_inds = buff_df.iloc[:, 0].to_numpy() - 1
+buff_spb = buff_df.iloc[:, 2].to_numpy()
+buff_bools = np.zeros(buff_dg2.shape, dtype="bool")
+buff_bools[buff_inds] = True
+
+sample_ind_file = f"Hugh{run_numbers[2]}.txt"
+sample_df = pd.read_csv(data_dir / sample_ind_file, header=None, sep=" ")
+sample_inds = sample_df.iloc[:, 0].to_numpy() - 1
+sample_spb = sample_df.iloc[:, 2].to_numpy()
+sample_bools = np.zeros(sample_dg2.shape, dtype="bool")
+sample_bools[sample_inds] = True
+
 
 # Offset by threshold
 # noJet_dg2 = noJet_dg2 - dg2_thresh
@@ -121,6 +137,10 @@ ransac.fit(
 est = ransac.estimator_
 noJet_dg2_m = est.coef_[0][0]
 noJet_dg2_b = est.intercept_[0]
+
+print(f"DG2 m: {noJet_dg2_m}, DG2 b: {noJet_dg2_b}")
+
+noJet_qadMean = noJet_qad_svd1[noJet_bools].mean()
 
 buff_detMeans = buff_radials.mean(axis=1)
 sample_detMeans = sample_radials.mean(axis=1)
@@ -231,6 +251,272 @@ leg = aax.legend()
 for lh in leg.legend_handles:
     lh.set_alpha(1)
 bfig.suptitle(f"{set_name} QAD after DG2 offset (RANSAC)")
+
+# Plot check: QAD norm double scale
+cfig, caxs = plt.subplots(1, 2, layout="constrained")
+aax = caxs[0]
+aax.scatter(
+    noJet_detMeans[noJet_bools],
+    noJet_qad_svd1[noJet_bools],
+    alpha=0.05,
+    label=rlabels[0],
+)
+aax.scatter(
+    buff_detMeans[buff_bools],
+    buff_qad_svd1[buff_bools],
+    alpha=0.05,
+    label=rlabels[1],
+)
+aax.scatter(
+    sample_detMeans[sample_bools],
+    sample_qad_svd1[sample_bools],
+    alpha=0.05,
+    label=rlabels[2],
+)
+aax.set_xlim(0, 2e8)
+leg = aax.legend()
+for lh in leg.legend_handles:
+    lh.set_alpha(1)
+
+aax = caxs[1]
+aax.scatter(
+    (noJet_detMeans[noJet_bools] - noJet_dg2_b) / noJet_dg2_m,
+    noJet_qad_svd1[noJet_bools],
+    alpha=0.05,
+    label=rlabels[0],
+)
+aax.scatter(
+    (buff_detMeans[buff_bools] - noJet_dg2_b)
+    / noJet_dg2_m
+    / (buff_qad_svd1[buff_bools] - noJet_qadMean),
+    buff_qad_svd1[buff_bools],
+    alpha=0.05,
+    label=rlabels[1],
+)
+aax.scatter(
+    (sample_detMeans[sample_bools] - noJet_dg2_b)
+    / noJet_dg2_m
+    / (sample_qad_svd1[sample_bools] - noJet_qadMean),
+    sample_qad_svd1[sample_bools],
+    alpha=0.05,
+    label=rlabels[2],
+)
+# aax.set_xlim(0, 2e8)
+leg = aax.legend()
+for lh in leg.legend_handles:
+    lh.set_alpha(1)
+cfig.suptitle(f"{set_name} QAD after DG2 offset, QAD scale")
+
+# Plot check: QAD norm single scale
+dfig, daxs = plt.subplots(1, 2, layout="constrained")
+aax = daxs[0]
+aax.scatter(
+    noJet_detMeans[noJet_bools],
+    noJet_qad_svd1[noJet_bools],
+    alpha=0.05,
+    label=rlabels[0],
+)
+aax.scatter(
+    buff_detMeans[buff_bools],
+    buff_qad_svd1[buff_bools],
+    alpha=0.05,
+    label=rlabels[1],
+)
+aax.scatter(
+    sample_detMeans[sample_bools],
+    sample_qad_svd1[sample_bools],
+    alpha=0.05,
+    label=rlabels[2],
+)
+aax.set_xlim(0, 2e8)
+leg = aax.legend()
+for lh in leg.legend_handles:
+    lh.set_alpha(1)
+
+aax = daxs[1]
+aax.scatter(
+    (noJet_detMeans[noJet_bools] - noJet_dg2_b) / noJet_dg2_m,
+    noJet_qad_svd1[noJet_bools],
+    alpha=0.05,
+    label=rlabels[0],
+)
+aax.scatter(
+    ((buff_detMeans[buff_bools] - noJet_dg2_b) / noJet_dg2_m)
+    / (buff_qad_svd1[buff_bools] - noJet_qadMean),
+    buff_qad_svd1[buff_bools],
+    alpha=0.05,
+    label=rlabels[1],
+)
+aax.scatter(
+    ((sample_detMeans[sample_bools] - noJet_dg2_b) / noJet_dg2_m)
+    / (sample_qad_svd1[sample_bools] - noJet_qadMean),
+    sample_qad_svd1[sample_bools],
+    alpha=0.05,
+    label=rlabels[2],
+)
+# aax.set_xlim(0, 2e8)
+leg = aax.legend()
+for lh in leg.legend_handles:
+    lh.set_alpha(1)
+dfig.suptitle(f"{set_name} QAD after DG2 offset, QAD scale")
+
+# %% Check qad normalization with noJet: naive normalization
+
+set_name = "AT25 100uM"
+run_numbers = [60, 61, 63]
+set_name = "AT25 1mM"
+run_numbers = [66, 67, 69]
+# set_name = "AT48 250uM"
+# run_numbers = [66, 72, 74]
+dg2_thresh = 2e5
+det_means_thresh = 1e7
+qad_thresh = 1.5
+qad_m_avg = 5.5e-06
+qad_b_avg = 0.3
+slope_thresh = 0.8
+
+all_qad = []
+all_dg2 = []
+all_det_means = []
+
+uall_qad = []
+uall_dg2 = []
+uall_det_means = []
+
+qfig, qax = plt.subplots(1, 3, layout="constrained")  # QAD detector correlations
+dfig, dax = plt.subplots(1, 3, layout="constrained")  # DG2 detector correlations
+afig, aax = plt.subplots(1, 2, layout="constrained")  # all filtered correlations
+ufig, uax = plt.subplots(1, 2, layout="constrained")  # all unfiltered correlations
+for ii, run in enumerate(run_numbers):
+    h5e_path = data_dir / f"{exp}_r{run:04d}_epix.h5"
+    with h5py.File(h5e_path, "r") as h5e:
+        fids = h5e["/frame_id"][:]
+        radials = h5e["/mean"][:]
+        dg2 = h5e["/dg2"][:]
+        qad_svd1 = h5e["/qad_svd1"][:]
+        radial_offset = h5e["/radial_offset"]
+        qad_offset = h5e["/qad_offset"]
+        q = h5e["/q_bins"][:]
+
+    det_means = np.mean(radials, axis=1)
+
+    # Estimate line from dg2, qad below thresh for filtering
+    if ii == 0:
+        bools = dg2 > dg2_thresh
+    else:
+        dg2_bin_width = 5000
+        dg2_bin_edges = np.arange(0, dg2_thresh + dg2_bin_width, dg2_bin_width)
+        dg2_bin_centers = (
+            dg2_bin_edges[:-1] + (dg2_bin_edges[1:] - dg2_bin_edges[:-1]) / 2
+        )
+        qad_maxes = [
+            np.max(qad_svd1[(dg2 > ij) & (dg2 < ik)])
+            for ij, ik in zip(dg2_bin_edges[:-1], dg2_bin_edges[1:])
+        ]
+        max_b, max_m = polyfit(dg2_bin_centers, qad_maxes, 1)
+        bools = (
+            (dg2 > dg2_thresh)
+            & (qad_svd1 < dg2 * max_m + max_b)
+            & (qad_svd1 > slope_thresh * (dg2 * max_m + max_b))
+        )
+
+    # Offset by threshold
+    # dg2 = dg2 - dg2_thresh
+
+    all_det_means.append(det_means[bools])
+    all_qad.append(qad_svd1[bools])
+    all_dg2.append(dg2[bools])
+
+    # DG2
+    ax = dax.ravel()[ii]
+    # dg2_b, dg2_m = polyfit(det_means[bools], dg2[bools], 1)
+    ransac = RANSACRegressor()
+    ransac.fit(det_means[bools].reshape(-1, 1), dg2[bools].reshape(-1, 1))
+    dg2_ransac = ransac.predict(det_means[bools].reshape(-1, 1))
+    ax.scatter(det_means[bools], dg2[bools], alpha=0.08)
+    # ax.plot(det_means[bools], det_means[bools] * dg2_m + dg2_b, "k", lw=2)
+    # ax.plot(det_means[bools], det_means[bools] * dg2_m + dg2_b, "k", lw=2)
+    ax.plot(det_means[bools], dg2_ransac, "k", lw=2)
+    est = ransac.estimator_
+    dg2_m = est.coef_[0]
+    dg2_b = est.intercept_[0]
+    ax.plot(det_means[bools], det_means[bools] * dg2_m + dg2_b, "r", lw=2)
+    ax.set_title(
+        f"Run {run}, corr = {np.corrcoef(det_means[bools], dg2[bools])[0,1]:1.2f}"
+    )
+    # ax.set_ylim(0, 400000)
+    # dg2_b, dg2_m = polyfit(det_means, dg2, 1)
+    # ax.scatter(det_means, dg2, alpha=0.08)
+    # ax.plot(det_means[bools], det_means[bools] * dg2_m + dg2_b, "k", lw=2)
+    # ax.set_title(f"Run {run}, corr = {np.corrcoef(det_means, dg2)[0,1]:1.2f}")
+
+    # ax.set_xlabel("det_means")
+    ax.set_ylabel("dg2")
+    dfig.suptitle(f"{set_name} det_mean, dg2 correlation (filtered)")
+    # QAD
+    ax = qax.ravel()[ii]
+    ransac = RANSACRegressor()
+    ransac.fit(det_means[bools].reshape(-1, 1), qad_svd1[bools].reshape(-1, 1))
+    qad_ransac = ransac.predict(det_means[bools].reshape(-1, 1))
+    qad_b, qad_m = polyfit(det_means[bools], qad_svd1[bools], 1)
+    ax.scatter(det_means[bools], qad_svd1[bools], alpha=0.08)
+    ax.plot(det_means[bools], qad_ransac, "k", lw=2)
+    # ax.plot(det_means[bools], det_means[bools] * qad_m + qad_b, "k", lw=2)
+    ax.set_title(
+        f"Run {run}, corr = {np.corrcoef(det_means[bools], qad_svd1[bools])[0,1]:1.2f}"
+    )
+    # ax.set_ylim(1, 3)
+    #
+    # Robustly fit linear model with RANSAC algorithm
+
+    # qad_b, qad_m = polyfit(det_means, qad_svd1, 1)
+    #
+
+    # ax.scatter(det_means, qad_svd1, alpha=0.08)
+    # # ax.plot(det_means, det_means * qad_m + qad_b, "k", lw=2)
+    # ax.set_title(f"Run {run}, corr = {np.corrcoef(det_means, qad_svd1)[0,1]:1.2f}")
+
+    # ax.set_xlabel("det_means")
+    ax.set_ylabel("qad_svd1")
+    qfig.suptitle(f"{set_name} det_mean, qad correlation (unfiltered)")
+
+
+# aax[0].scatter(all_det_means.flatten(), all_dg2.flatten(), alpha=0.05)
+# aax[1].scatter(all_det_means.flatten(), all_qad.flatten(), alpha=0.05)
+rlabels = [
+    "noJet",
+    "buffer",
+    "sample",
+]
+for rnum in range(len(all_dg2)):
+    aax[0].scatter(all_det_means[rnum], all_dg2[rnum], alpha=0.05, label=rlabels[rnum])
+    aax[1].scatter(all_det_means[rnum], all_qad[rnum], alpha=0.05)
+
+afig.suptitle(f"{set_name} NoJet, buffer, and sample filtered")
+aax[0].set_xlabel("Detector means")
+aax[1].set_xlabel("Detector means")
+aax[0].set_ylabel("DG2 means")
+aax[1].set_ylabel("QAD means")
+aax[0].set_xlim(0, 2e8)
+aax[1].set_xlim(0, 2e8)
+# aax[0].set_xlim(0, 1.5e8)
+# aax[1].set_xlim(0, 1.5e8)
+leg = aax[0].legend()
+for lh in leg.legend_handles:
+    lh.set_alpha(1)
+
+# uax[0].scatter(uall_det_means.flatten(), uall_dg2.flatten(), alpha=0.05)
+# uax[1].scatter(uall_det_means.flatten(), uall_qad.flatten(), alpha=0.05)
+for rnum in range(len(uall_dg2)):
+    uax[0].scatter(uall_det_means[rnum], uall_dg2[rnum], alpha=0.05)
+    uax[1].scatter(uall_det_means[rnum], uall_qad[rnum], alpha=0.05)
+ufig.suptitle(f"{set_name} NoJet, buffer, and sample unfiltered")
+uax[0].set_xlabel("Detector means")
+uax[1].set_xlabel("Detector means")
+uax[0].set_ylabel("DG2 means")
+uax[1].set_ylabel("QAD means")
+uax[0].set_xlim(0, 2e8)
+uax[1].set_xlim(0, 2e8)
 
 
 # %% Check qad normalization with noJet
